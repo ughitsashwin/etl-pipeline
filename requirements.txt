@@ -1,0 +1,23 @@
+# HTTP requests — used in extract.py to call the weather API
+requests==2.32.3
+
+# Data manipulation — the core library for all our transformations
+pandas==2.2.2
+
+# Data validation — enforces schema rules on our DataFrames
+pandera==0.20.3
+
+# Testing framework — runs all our test files
+pytest==8.2.2
+
+# Test coverage plugin — shows what % of code is covered by tests
+pytest-cov==5.0.0
+
+# Linter — checks code style and catches errors before CI does
+ruff==0.4.9
+
+# Dashboard — turns Python scripts into interactive web apps
+streamlit==1.36.0
+
+# Database ORM — lets us talk to SQLite without raw SQL strings
+sqlalchemy==2.0.31
