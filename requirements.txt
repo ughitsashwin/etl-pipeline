@@ -2,7 +2,7 @@
 requests==2.32.3
 
 # Data manipulation — the core library for all our transformations
-pandas==2.2.2
+pandas==2.2.3
 
 # Data validation — enforces schema rules on our DataFrames
 pandera==0.20.3
