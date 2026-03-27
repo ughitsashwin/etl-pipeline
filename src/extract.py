@@ -17,7 +17,7 @@ from datetime import date, timedelta
 
 # The base URL for the Open-Meteo forecast API.
 # All our requests will be built on top of this.
-BASE_URL = "https://api.open-meteo.com/v1/forecast"
+BASE_URL = "https://api.broken-url-test.com/v1/forecast"
 
 
 def fetch_weather(city: str, latitude: float, longitude: float, days_back: int = 7) -> pd.DataFrame:
