@@ -1,0 +1,68 @@
+# .github/workflows/pipeline.yml
+#
+# WHAT THIS FILE DOES:
+# This is our scheduled pipeline workflow.
+# It runs the full ETL automatically every day at 07:00 UTC.
+#
+# WHY THIS MATTERS:
+# This turns your script into a real data product.
+# Every morning, without anyone doing anything, fresh weather data
+# for all 5 cities gets fetched, validated, and loaded into the database.
+# If anything goes wrong, a Slack alert fires immediately.
+#
+# This is called a "scheduled job" or "cron job" — a fundamental
+# concept in data engineering used everywhere from startups to Netflix.
+#
+# CRON SYNTAX EXPLAINED:
+# "0 7 * * *" means: at minute 0, hour 7, every day, every month, every weekday
+#  - - - - -
+#  | | | | |
+#  | | | | day of week (0-7, 0=Sunday)
+#  | | | month (1-12)
+#  | | day of month (1-31)
+#  | hour (0-23)
+#  minute (0-59)
+
+name: Daily Pipeline
+
+on:
+  # Run on a schedule — every day at 07:00 UTC
+  schedule:
+    - cron: "0 7 * * *"
+
+  # Also allow manual triggering from the GitHub Actions UI.
+  # This is useful for testing without waiting for 07:00 UTC.
+  # Go to Actions tab → Daily Pipeline → Run workflow
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Run the full ETL pipeline
+      # If pipeline.py exits with code 1 (all cities failed),
+      # this step fails and triggers the alert step below
+      - name: Run ETL pipeline
+        run: PYTHONPATH=. python src/pipeline.py
+
+      # This step ONLY runs if the pipeline step above failed.
+      # "if: failure()" is the key — it skips this on success.
+      # It sends a message to your Slack channel with a link to the logs.
+      - name: Alert on failure
+        if: failure()
+        run: |
+          curl -X POST -H "Content-type: application/json"           --data "{"text":" Pipeline failed! Check the logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}"           ${{ secrets.SLACK_WEBHOOK_URL }}
