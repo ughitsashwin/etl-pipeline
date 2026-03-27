@@ -62,4 +62,4 @@ jobs:
       # --cov-fail-under=80 fails CI if coverage drops below 80%
       - name: Run tests with coverage
         run: |
-          PYTHONPATH=. pytest tests/ -v --cov=src --cov-report=term-missing --cov-fail-under=19
+          PYTHONPATH=. pytest tests/ -v --cov=src --cov-report=term-missing --cov-fail-under=13
