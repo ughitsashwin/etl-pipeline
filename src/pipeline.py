@@ -79,6 +79,13 @@ def run() -> int:
             print(f"[{city_name}] Transforming...")
             clean_df = transform_weather(raw_df)
 
+            # --- VALIDATE ---
+            # This will raise a SchemaError if the data doesn't meet our rules.
+            # The except block below will catch it and log it as a failed run.
+            print(f"[{city_name}] Validating...")
+            from src.validate import validate
+            clean_df = validate(clean_df)
+
             # --- LOAD ---
             print(f"[{city_name}] Loading...")
             rows = load_weather(clean_df)
