@@ -1,31 +1,23 @@
 # src/pipeline.py
 #
 # WHAT THIS FILE DOES:
-# This is the main entrypoint for the entire ETL pipeline.
-# It wires together extract → transform → load for multiple cities
-# and handles errors gracefully so one failing city doesn't
-# crash the whole pipeline.
-#
-# This is the file that GitHub Actions will run every day on a schedule.
-# It also logs failures to the database so the dashboard can show them.
-#
-# DESIGN PATTERN — Orchestrator:
-# pipeline.py doesn't contain any business logic itself.
-# It just coordinates the other modules. This is called the
-# "orchestrator pattern" — common in tools like Apache Airflow,
-# Prefect, and Dagster that manage production data pipelines.
+# Orchestrates the full ETL pipeline for all configured cities.
+# Now also sends a city comparison summary to Slack on every
+# successful run, so you get proactive visibility into your data
+# — not just alerts when things break.
 
 import sys
+import os
 import pandas as pd
 from src.extract import fetch_weather
 from src.transform import transform_weather
 from src.load import load_weather, get_engine, create_tables
-from sqlalchemy import text
+from src.validate import validate
+from sqlalchemy import create_engine, text
+import urllib.request
+import json
 
 
-# The cities we want to track.
-# Each entry has a human-readable name plus the GPS coordinates
-# the API needs. You can add any city in the world here.
 CITIES = [
     {"name": "Dublin",    "lat": 53.33,   "lon": -6.25},
     {"name": "London",    "lat": 51.51,   "lon": -0.13},
@@ -35,11 +27,96 @@ CITIES = [
 ]
 
 
+def send_slack_message(message: str):
+    """
+    Send a message to Slack via the webhook URL.
+
+    The webhook URL is read from the SLACK_WEBHOOK_URL environment variable.
+    On your Mac: export SLACK_WEBHOOK_URL=https://hooks.slack.com/...
+    In GitHub Actions: stored as a repository secret, injected automatically.
+
+    We use urllib (built into Python) instead of requests so this function
+    has zero extra dependencies.
+    """
+    webhook_url = os.environ.get("SLACK_WEBHOOK_URL")
+
+    # If no webhook URL is set, skip silently.
+    # This means the pipeline still works locally without Slack configured.
+    if not webhook_url:
+        print("  [Slack] No webhook URL set — skipping notification")
+        return
+
+    payload = json.dumps({"text": message}).encode("utf-8")
+
+    req = urllib.request.Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status == 200:
+                print("  [Slack] Notification sent successfully")
+            else:
+                print(f"  [Slack] Unexpected status: {response.status}")
+    except Exception as e:
+        # Never let a Slack failure crash the pipeline
+        print(f"  [Slack] Failed to send notification: {e}")
+
+
+def build_summary_message(results: list, total_rows: int, failed_cities: list) -> str:
+    """
+    Build a formatted Slack message with a city comparison table.
+
+    Args:
+        results:      List of dicts with per-city stats
+        total_rows:   Total rows loaded across all cities
+        failed_cities: List of city names that failed
+
+    Returns:
+        A formatted string ready to send to Slack
+    """
+    ran_at = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    status = "Pipeline completed successfully" if not failed_cities else "Pipeline completed with errors"
+    icon   = "✅" if not failed_cities else "⚠️"
+
+    lines = [
+        f"{icon} *{status}*",
+        f"🕐 Ran at: {ran_at}",
+        f"📊 Rows loaded: {total_rows} | Cities: {len(CITIES) - len(failed_cities)}/{len(CITIES)}",
+        "",
+        "🏙️ *City Summary (last 7 days):*",
+        "```",
+    ]
+
+    # Build a fixed-width table so it lines up neatly in Slack
+    # Slack renders text inside triple backticks as monospace
+    header = f"{'City':<12} {'Avg Temp':>8} {'Total Rain':>11} {'Rainy Days':>11}"
+    lines.append(header)
+    lines.append("-" * len(header))
+
+    for r in results:
+        rainy_icon = "💧" if r["rainy_days"] > 0 else "☀️"
+        row = (
+            f"{r['city']:<12}"
+            f"{r['avg_temp']:>7.1f}°C"
+            f"{r['total_rain']:>10.1f}mm"
+            f"  {rainy_icon} {r['rainy_days']} days"
+        )
+        lines.append(row)
+
+    lines.append("```")
+
+    if failed_cities:
+        lines.append(f"❌ Failed cities: {', '.join(failed_cities)}")
+
+    return "\n".join(lines)
+
+
 def log_failure(engine, error_message: str):
-    """
-    Log a pipeline failure to the pipeline_runs table.
-    Called when a city's ETL fails so we have a record in the dashboard.
-    """
+    """Log a pipeline failure to the pipeline_runs table."""
     with engine.begin() as conn:
         conn.execute(text("""
             INSERT INTO pipeline_runs (ran_at, rows_loaded, status, message)
@@ -55,55 +132,57 @@ def log_failure(engine, error_message: str):
 def run() -> int:
     """
     Run the full ETL pipeline for all configured cities.
+    Sends a summary to Slack on completion.
 
     Returns:
         Total number of rows loaded across all cities.
-        Returns 0 if all cities failed (causes GitHub Actions to mark the run as failed).
     """
     engine = get_engine()
     create_tables(engine)
 
-    total_rows = 0
+    total_rows   = 0
     failed_cities = []
+    city_results  = []
 
     for city in CITIES:
         city_name = city["name"]
 
         try:
-            # --- EXTRACT ---
+            # EXTRACT
             print(f"[{city_name}] Extracting...")
             raw_df = fetch_weather(city_name, city["lat"], city["lon"])
             print(f"[{city_name}] Got {len(raw_df)} raw rows")
 
-            # --- TRANSFORM ---
+            # TRANSFORM
             print(f"[{city_name}] Transforming...")
             clean_df = transform_weather(raw_df)
 
-            # --- VALIDATE ---
-            # This will raise a SchemaError if the data doesn't meet our rules.
-            # The except block below will catch it and log it as a failed run.
+            # VALIDATE
             print(f"[{city_name}] Validating...")
-            from src.validate import validate
             clean_df = validate(clean_df)
 
-            # --- LOAD ---
+            # LOAD
             print(f"[{city_name}] Loading...")
             rows = load_weather(clean_df)
             print(f"[{city_name}] Done — {rows} rows loaded")
 
             total_rows += rows
 
+            # Collect stats for the Slack summary table
+            city_results.append({
+                "city":       city_name,
+                "avg_temp":   clean_df["temp_avg"].mean(),
+                "total_rain": clean_df["precip_mm"].sum(),
+                "rainy_days": int(clean_df["is_rainy"].sum()),
+            })
+
         except Exception as e:
-            # If one city fails, log it and continue with the next city.
-            # We don't want London failing to stop New York from loading.
-            # This is called "partial failure handling" — important in
-            # production pipelines where individual sources can go down.
             error_msg = f"{city_name} failed: {str(e)}"
             print(f"[{city_name}] ERROR — {error_msg}")
             failed_cities.append(city_name)
             log_failure(engine, error_msg)
 
-    # Print a final summary so it's easy to read in GitHub Actions logs
+    # Print summary to console
     print()
     print("=" * 40)
     print("Pipeline complete")
@@ -113,13 +192,15 @@ def run() -> int:
         print(f"  Failed cities    : {', '.join(failed_cities)}")
     print("=" * 40)
 
+    # Send Slack summary
+    print()
+    print("Sending Slack summary...")
+    message = build_summary_message(city_results, total_rows, failed_cities)
+    send_slack_message(message)
+
     return total_rows
 
 
 if __name__ == "__main__":
-    # When run directly (python src/pipeline.py), execute the pipeline.
-    # sys.exit(1) tells the shell — and GitHub Actions — that something
-    # went wrong. A non-zero exit code marks the CI run as failed,
-    # which triggers our Slack alert.
     rows = run()
     sys.exit(0 if rows > 0 else 1)
