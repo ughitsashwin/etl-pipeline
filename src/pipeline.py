@@ -106,7 +106,7 @@ def run() -> int:
     # Print a final summary so it's easy to read in GitHub Actions logs
     print()
     print("=" * 40)
-    print(f"Pipeline complete")
+    print("Pipeline complete")
     print(f"  Cities succeeded : {len(CITIES) - len(failed_cities)}/{len(CITIES)}")
     print(f"  Total rows loaded: {total_rows}")
     if failed_cities:

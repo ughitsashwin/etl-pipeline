@@ -43,13 +43,13 @@ def test_temp_range_is_correct():
 
 def test_is_rainy_true_above_threshold():
     result = transform_weather(make_sample_df())
-    assert result.loc[1, "is_rainy"] == True
+    assert result.loc[1, "is_rainy"] is True
 
 
 def test_is_rainy_false_below_threshold():
     result = transform_weather(make_sample_df())
-    assert result.loc[0, "is_rainy"] == False
-    assert result.loc[2, "is_rainy"] == False
+    assert result.loc[0, "is_rainy"] is False
+    assert result.loc[2, "is_rainy"] is False
 
 
 def test_is_rainy_is_boolean_type():
