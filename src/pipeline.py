@@ -13,7 +13,7 @@ from src.extract import fetch_weather
 from src.transform import transform_weather
 from src.load import load_weather, get_engine, create_tables
 from src.validate import validate
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 import urllib.request
 import json
 
